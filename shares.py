@@ -6,8 +6,8 @@ import tensorflow as tf
 import dataset
 
 
-LSTM_NUM_HIDDEN=16
-DNN_HIDDEN=32 
+LSTM_NUM_HIDDEN=256
+DNN_HIDDEN=1024 
 EMBEDDING_SIZE = 16
 
 HISTORY_LENGTH=30
@@ -15,20 +15,22 @@ DAILY_FEATURE_SIZE=6
 DATE_FEATURE_VOCABS=['0', '1']
 LABELS_VOCABS=['%s' % (i-10) for i in range(21)]
 
-def print_to_file(real_y, pred_y, y_one_, y_one, filename):
+def print_to_file(real_y, pred_y, filename):
     with open(filename, 'w') as f:
         for i in range(len(real_y)):
             print >> f, '%s\t%s' % (real_y[i], pred_y[i])
-            print >> f, ', '.join([str(value) for value in y_one_[i]])
-            print >> f, ', '.join([str(value) for value in y_one[i]])
+#            print >> f, ', '.join([str(value) for value in y_one_[i]])
+#            print >> f, ', '.join([str(value) for value in y_one[i]])
 
 def _rnn(inputs, num_hidden):
-    rnn_cell = tf.contrib.rnn.LSTMCell(num_hidden)
-    output, _ = tf.nn.dynamic_rnn(
+    rnn_cell = [tf.contrib.rnn.GRUCell(num_hidden) for i in range(3)]
+    rnn_cell = tf.contrib.rnn.MultiRNNCell(rnn_cell)
+    output, states = tf.nn.dynamic_rnn(
             rnn_cell,
             inputs,
             dtype=tf.float32)
-    return output, num_hidden
+#    output = tf.concat(axis=1, values=states)
+    return output
 
 def _one_hot(features, vocabs):
 #    vocabs = tf.constant(vocabs)
@@ -48,7 +50,9 @@ def _lstm_attention_model(share_features, date_feature):
     embedding_layer = tf.reshape(embedding_layer, [-1, HISTORY_LENGTH, EMBEDDING_SIZE])
     ''' embedding_layer: [batch, HISTORY_LENGTH, EMBEDDING_SIZE] '''
 
-    lstm_layer, feature_size = _rnn(embedding_layer, LSTM_NUM_HIDDEN)
+#    embedding_layer = share_features
+
+    lstm_layer = _rnn(embedding_layer, LSTM_NUM_HIDDEN)
     lstm_layer = tf.reshape(lstm_layer, [-1, HISTORY_LENGTH * LSTM_NUM_HIDDEN])
 
 #    date_feature = _one_hot(date_feature, DATE_FEATURE_VOCABS)
@@ -56,8 +60,8 @@ def _lstm_attention_model(share_features, date_feature):
     dnn_input = lstm_layer
     
 #    dnn_input = tf.layers.dense(inputs=dnn_input, units=DNN_HIDDEN, activation=tf.nn.relu)
-    dnn_feature = tf.layers.dense(inputs=dnn_input, units=len(LABELS_VOCABS), activation=tf.nn.tanh)
-    return tf.nn.softmax(dnn_feature), lstm_layer, embedding_layer
+    dnn_feature = tf.layers.dense(inputs=dnn_input, units=len(LABELS_VOCABS), activation=None)
+    return dnn_feature, lstm_layer, embedding_layer
 
 
 def train(filename, test_filename):
@@ -82,7 +86,7 @@ def train(filename, test_filename):
     accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
     
     loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(labels=y_one_hot_, logits=y_one_hot))
-    train_step = tf.train.GradientDescentOptimizer(0.01).minimize(loss)
+    train_step = tf.train.AdamOptimizer(0.001).minimize(loss)
     
     init_op = tf.group(
             tf.global_variables_initializer(), 
@@ -90,9 +94,13 @@ def train(filename, test_filename):
             tf.tables_initializer())
     
     with tf.Session() as sess:
+        
+#        merged_summary_op = tf.summary.merge_all()
+        summary_writer = tf.summary.FileWriter('logs', sess.graph)
+    
         sess.run(init_op)
         
-        batch_size = 800
+        batch_size = 128
         for epoch in range(10000000):
             for i in range(length / batch_size + 1):
                 start = i * batch_size
@@ -108,7 +116,7 @@ def train(filename, test_filename):
                     })
                     
             if epoch % 10 == 0:
-                _loss, _accuracy, real_y, pred_y = sess.run([loss, accuracy, y_, y],
+                _loss, _accuracy = sess.run([loss, accuracy],
                 feed_dict = {
                     share_history_placeholder: history_share_inputs, 
                     date_feature_placeholder: date_feature_inputs,
@@ -118,7 +126,7 @@ def train(filename, test_filename):
                 print '---------------TRAIN--------------'
                 print 'epoch:%s\tloss:%s\taccuracy:%s' % (epoch, _loss, _accuracy)
  
-                _loss, _accuracy, real_y, pred_y, _y_one_hot_, _y_one_hot, _watch_lstm, _watch_embedding = sess.run([loss, accuracy, y_, y, y_one_hot_, y_one_hot, watch_lstm, watch_embedding],
+                _loss, _accuracy, real_y, pred_y = sess.run([loss, accuracy, y_, y],
                 feed_dict = {
                     share_history_placeholder: test_history_share_inputs, 
                     date_feature_placeholder: test_date_feature_inputs,
@@ -127,11 +135,7 @@ def train(filename, test_filename):
                 
                 print '---------------TEST--------------'
                 print 'epoch:%s\tloss:%s\taccuracy:%s' % (epoch, _loss, _accuracy)
-#                print_to_file(real_y, pred_y, _y_one_hot_, _y_one_hot, 'result/result_%s' % epoch)
-#                print _watch_lstm[0][-10:]
-#                print _watch_lstm[1][-10:]
-#                print _watch_embedding[0][-1][0:10]
-#                print _watch_embedding[1][-1][0:10]
+                print_to_file(real_y, pred_y, 'result/result_%s' % epoch)
  
 
 
